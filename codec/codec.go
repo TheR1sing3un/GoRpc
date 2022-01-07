@@ -41,5 +41,5 @@ var NewCodeFuncMap map[Type]NewCodecFunc
 func init() {
 	NewCodeFuncMap = make(map[Type]NewCodecFunc)
 	//将Gob的构造函数添加进去
-	NewCodeFuncMap[GobType] = NewGobCodeFunc
+	NewCodeFuncMap[GobType] = NewGobCodecFunc
 }

@@ -20,7 +20,7 @@ type GobCodec struct {
 }
 
 //构造函数
-func NewGobCodeFunc(conn io.ReadWriteCloser) Codec {
+func NewGobCodecFunc(conn io.ReadWriteCloser) Codec {
 	//根据连接创建Writer
 	buf := bufio.NewWriter(conn)
 	return &GobCodec{
@@ -57,7 +57,7 @@ func (c *GobCodec) Write(h *Header, body interface{}) (err error) {
 	}
 	//对Body加密
 	if err := c.enc.Encode(body); err != nil {
-		log.Println("rpc codec: gob error encoding body:", body)
+		log.Println("rpc codec: gob error encoding body:", err)
 		return err
 	}
 	return nil
