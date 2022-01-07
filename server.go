@@ -2,12 +2,13 @@ package gorpc
 
 import (
 	"encoding/json"
-	"fmt"
+	"errors"
 	"github.com/TheR1sing3un/gorpc/codec"
 	"io"
 	"log"
 	"net"
 	"reflect"
+	"strings"
 	"sync"
 )
 
@@ -27,7 +28,11 @@ var DefaultOption = &Option{
 	CodecType:   codec.GobType,
 }
 
-type Server struct{}
+//server服务端
+type Server struct {
+	//保存service
+	serviceMap sync.Map
+}
 
 func NewServer() *Server {
 	return &Server{}
@@ -54,6 +59,47 @@ func (server *Server) Accept(lis net.Listener) {
 //默认Accept方法,使用默认实例
 func Accept(lis net.Listener) {
 	DefaultServer.Accept(lis)
+}
+
+//将某个实例的service注册到server
+func (server *Server) Register(instance interface{}) error {
+	s := newService(instance)
+	//将service加入到map
+	if _, dup := server.serviceMap.LoadOrStore(s.name, s); dup {
+		//若已经存在
+		return errors.New("rpc: service already defined: " + s.name)
+	}
+	return nil
+}
+
+//注册进默认的server中
+func Register(instance interface{}) error {
+	return DefaultServer.Register(instance)
+}
+
+//根据服务方法名找到service和目标methodType
+func (server *Server) findService(serverMethod string) (svc *service, mType *methodType, err error) {
+	//获取最后一个'.'的下标
+	dot := strings.LastIndex(serverMethod, ".")
+	if dot < 0 {
+		err = errors.New("rpc server: service/method request ill-formed: " + serverMethod)
+		return
+	}
+	serviceName, methodName := serverMethod[:dot], serverMethod[dot+1:]
+	//先根据service名获取service
+	serviceInterface, ok := server.serviceMap.Load(serviceName)
+	if !ok {
+		err = errors.New("rpc server: can't find service: " + serviceName)
+		return
+	}
+	//类型转化 interface -> *service
+	svc = serviceInterface.(*service)
+	//再根据方法名从service获取该方法的methodType
+	mType = svc.method[methodName]
+	if mType == nil {
+		err = errors.New("rpc server: can't find method: " + methodName)
+	}
+	return
 }
 
 func (server *Server) ServeConn(conn io.ReadWriteCloser) {
@@ -120,6 +166,10 @@ type request struct {
 	argv reflect.Value
 	//返回值
 	replyv reflect.Value
+	//该请求的请求的methodType
+	mType *methodType
+	//该请求的service(用于方法调用)
+	service *service
 }
 
 //读取请求的Header
@@ -141,12 +191,22 @@ func (server *Server) readRequest(c codec.Codec) (*request, error) {
 		return nil, err
 	}
 	req := &request{h: h}
-	//TODO 这里应该需要判断argv的类型
-	//day1,先假设参数是string类型
-	req.argv = reflect.New(reflect.TypeOf(""))
-	if err = c.ReadBody(req.argv.Interface()); err != nil {
+	req.service, req.mType, err = server.findService(h.ServiceMethod)
+	if err != nil {
+		return req, err
+	}
+	req.argv = req.mType.newArgv()
+	req.replyv = req.mType.newReply()
+
+	//确保为指针,因为ReadBody需要指针类型的参数
+	argvPtr := req.argv.Interface()
+	if req.argv.Type().Kind() != reflect.Ptr {
+		argvPtr = req.argv.Addr().Interface()
+	}
+	if err = c.ReadBody(argvPtr); err != nil {
 		//从argv中解析出数据
 		log.Println("rpc server: read argv err:", err)
+		return req, err
 	}
 	return req, nil
 }
@@ -163,14 +223,16 @@ func (server *Server) sendResponse(c codec.Codec, h *codec.Header, body interfac
 
 //处理请求
 func (server *Server) handleRequest(c codec.Codec, req *request, sendLock *sync.Mutex, wg *sync.WaitGroup) {
-	//TODO 这里应该调用注册的rpc方法,然后得到正确的replyv
 	//day1 只做打印argv和返回hello
 	//处理完请求,Done使计数器-1
 	defer wg.Done()
-	//打印header和argv
-	log.Println(req.h, req.argv.Elem())
-	//将返回值设为header的序列号
-	req.replyv = reflect.ValueOf(fmt.Sprintf("gorpc resp %d", req.h.Seq))
+	err := req.service.call(req.mType, req.argv, req.replyv)
+	if err != nil {
+		req.h.Error = err.Error()
+		//返回错误响应
+		server.sendResponse(c, req.h, invalidRequest, sendLock)
+		return
+	}
 	//发送响应
 	server.sendResponse(c, req.h, req.replyv.Interface(), sendLock)
 }

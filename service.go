@@ -59,8 +59,8 @@ type service struct {
 	name string
 	//结构体类型
 	typ reflect.Type
-	//结构体实例
-	structInstance reflect.Value
+	//实例
+	instance reflect.Value
 	//存储结构体的方法名->方法
 	method map[string]*methodType
 }
@@ -68,8 +68,8 @@ type service struct {
 //根据结构体实例实例化service
 func newService(structInstance interface{}) *service {
 	s := new(service)
-	s.structInstance = reflect.ValueOf(structInstance)
-	s.name = reflect.Indirect(s.structInstance).Type().Name()
+	s.instance = reflect.ValueOf(structInstance)
+	s.name = reflect.Indirect(s.instance).Type().Name()
 	s.typ = reflect.TypeOf(structInstance)
 	//判断该结构体是否合法
 	if !ast.IsExported(s.name) {
@@ -120,7 +120,7 @@ func (s *service) call(m *methodType, argv, reply reflect.Value) error {
 	//根据method获取func
 	f := m.method.Func
 	//调用方法,获取返回值
-	returnValues := f.Call([]reflect.Value{s.structInstance, argv, reply})
+	returnValues := f.Call([]reflect.Value{s.instance, argv, reply})
 	if errInter := returnValues[0].Interface(); errInter != nil {
 		return errInter.(error)
 	}
